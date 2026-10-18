@@ -1,6 +1,7 @@
 package moodle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 )
@@ -158,19 +159,40 @@ func (c *Client) SaveSubmission(ctx context.Context, assignID Int, in Submission
 	if in.DraftItem != 0 {
 		plugin["files_filemanager"] = in.DraftItem
 	}
-	var out []Warning
-	err := c.Call(ctx, "mod_assign_save_submission", map[string]any{"assignmentid": assignID, "plugindata": plugin}, &out)
-	return out, err
+	return c.callWarnings(ctx, "mod_assign_save_submission", map[string]any{"assignmentid": assignID, "plugindata": plugin})
 }
 
 func (c *Client) SubmitForGrading(ctx context.Context, assignID Int, acceptStatement bool) ([]Warning, error) {
-	var out []Warning
-	err := c.Call(ctx, "mod_assign_submit_for_grading", map[string]any{"assignmentid": assignID, "acceptsubmissionstatement": acceptStatement}, &out)
-	return out, err
+	return c.callWarnings(ctx, "mod_assign_submit_for_grading", map[string]any{"assignmentid": assignID, "acceptsubmissionstatement": acceptStatement})
 }
 
 func (c *Client) RemoveSubmission(ctx context.Context, assignID, userID Int) ([]Warning, error) {
-	var out []Warning
-	err := c.Call(ctx, "mod_assign_remove_submission", map[string]any{"userid": userID, "assignid": assignID}, &out)
-	return out, err
+	return c.callWarnings(ctx, "mod_assign_remove_submission", map[string]any{"userid": userID, "assignid": assignID})
+}
+
+func (c *Client) callWarnings(ctx context.Context, function string, params any) ([]Warning, error) {
+	raw, err := c.CallRaw(ctx, function, params)
+	if err != nil {
+		return nil, err
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var list []Warning
+	if raw[0] == '[' {
+		err := json.Unmarshal(raw, &list)
+		return list, err
+	}
+	var obj struct {
+		Status   *Bool     `json:"status"`
+		Warnings []Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	if obj.Status != nil && !*obj.Status && len(obj.Warnings) == 0 {
+		obj.Warnings = []Warning{{WarningCode: "failed", Message: function + " didn't succeed"}}
+	}
+	return obj.Warnings, nil
 }
